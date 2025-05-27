@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <title>Falafel Drifter</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #87ceeb; font-family: sans-serif; }
+    canvas { display: block; }
+    #startScreen {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.8);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+      user-select: none;
+    }
+    #startScreen h1 {
+      font-size: 3em;
+      margin-bottom: 0.5em;
+    }
+    #startScreen p {
+      font-size: 1.2em;
+      margin-bottom: 1em;
+    }
+    #startScreen button {
+      padding: 10px 30px;
+      font-size: 1.5em;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      background-color: #ff4500;
+      color: white;
+      transition: background-color 0.3s ease;
+    }
+    #startScreen button:hover {
+      background-color: #e03e00;
+    }
+    #score {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-size: 20px;
+      z-index: 5;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="startScreen">
+    <h1>Falafel Drifter</h1>
+    <p>اضغط على زر "ابدأ" للانطلاق!</p>
+    <button id="startBtn">ابدأ</button>
+  </div>
+
+  <div id="score">النقاط: 0</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    let scene, camera, renderer, car, keys = {};
+    let velocity = 0;
+    const acceleration = 0.02;
+    const deceleration = 0.01;
+    const maxSpeed = 3;
+    const turnSpeed = 0.05;
+    const smokeParticles = [];
+    let isGameStarted = false;
+    let score = 0;
+
+    function createSmokeTexture() {
+      const size = 128;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      const gradient = ctx.createRadialGradient(size/2, size/2, size/8, size/2, size/2, size/2);
+      gradient.addColorStop(0, 'rgba(200,200,200,0.6)');
+      gradient.addColorStop(0.3, 'rgba(120,120,120,0.3)');
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    function createSmokeParticle(position){
+      const geometry = new THREE.PlaneGeometry(1, 1);
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x555555,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false,
+        map: createSmokeTexture(),
+        blending: THREE.NormalBlending,
+        side: THREE.DoubleSide
+      });
+      const particle = new THREE.Mesh(geometry, material);
+      particle.position.copy(position);
+      particle.rotation.x = -Math.PI / 2;
+      particle.life = 1;
+      particle.size = 1 + Math.random();
+      particle.speedY = 0.02 + Math.random() * 0.01;
+      smokeParticles.push(particle);
+      scene.add(particle);
+    }
+
+    function animateSmoke(){
+      for(let i = smokeParticles.length - 1; i >= 0; i--) {
+        const p = smokeParticles[i];
+        p.position.y += p.speedY;
+        p.material.opacity = p.life * 0.5;
+        p.scale.set(p.size * (1 - p.life), p.size * (1 - p.life), 1);
+        p.life -= 0.01;
+        if (p.life <= 0) {
+          scene.remove(p);
+          smokeParticles.splice(i, 1);
+        }
+      }
+    }
+
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);
+
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 5, 15);
+
+      renderer = new THREE.WebGLRenderer({antialias:true});
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const groundGeometry = new THREE.PlaneGeometry(300, 300);
+      const groundMaterial = new THREE.MeshStandardMaterial({color: 0x444444});
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+
+      const roadGeometry = new THREE.PlaneGeometry(20, 300);
+      const roadMaterial = new THREE.MeshStandardMaterial({color: 0x111111});
+      const road = new THREE.Mesh(roadGeometry, roadMaterial);
+      road.position.y = 0.01;
+      road.rotation.x = -Math.PI / 2;
+      scene.add(road);
+
+      const lineMaterial = new THREE.MeshStandardMaterial({color: 0xffffff});
+      for(let i = -140; i <= 140; i += 10){
+        const lineGeo = new THREE.BoxGeometry(0.3, 0.01, 4);
+        const line = new THREE.Mesh(lineGeo, lineMaterial);
+        line.position.set(0, 0.02, i);
+        scene.add(line);
+      }
+
+      const sun = new THREE.DirectionalLight(0xfff8e7, 1.2);
+      sun.position.set(30, 50, 30);
+      sun.castShadow = true;
+      scene.add(sun);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+
+      car = new THREE.Group();
+
+      const carBodyGeometry = new THREE.BoxGeometry(2, 0.5, 4);
+      const carBodyMaterial = new THREE.MeshStandardMaterial({color: 0xff0000});
+      const carBody = new THREE.Mesh(carBodyGeometry, carBodyMaterial);
+      carBody.position.y = 0.25;
+      car.add(carBody);
+
+      const carTopGeometry = new THREE.BoxGeometry(1.4, 0.4, 2);
+      const carTopMaterial = new THREE.MeshStandardMaterial({color: 0x770000});
+      const carTop = new THREE.Mesh(carTopGeometry, carTopMaterial);
+      carTop.position.y = 0.7;
+      car.add(carTop);
+
+      const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 32);
+      const wheelMaterial = new THREE.MeshStandardMaterial({color: 0x222222});
+      const wheelPositions = [
+        [-0.9, 0.15, -1.5],
+        [0.9, 0.15, -1.5],
+        [-0.9, 0.15, 1.5],
+        [0.9, 0.15, 1.5]
+      ];
+      for (let pos of wheelPositions){
+        const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(...pos);
+        car.add(wheel);
+      }
+
+      car.position.y = 0.5;
+      scene.add(car);
+
+      for(let i = -120; i <= 120; i += 30){
+        let h1 = 10 + Math.random() * 15;
+        const color1 = new THREE.Color(`hsl(${Math.random() * 360}, 30%, 60%)`);
+        const buildingMaterial1 = new THREE.MeshStandardMaterial({color: color1});
+        const b1 = new THREE.Mesh(new THREE.BoxGeometry(8, h1, 8), buildingMaterial1);
+        b1.position.set(-15, h1 / 2, i + (Math.random() * 10 - 5));
+        scene.add(b1);
+
+        let h2 = 10 + Math.random() * 15;
+        const color2 = new THREE.Color(`hsl(${Math.random() * 360}, 30%, 60%)`);
+        const buildingMaterial2 = new THREE.MeshStandardMaterial({color: color2});
+        const b2 = new THREE.Mesh(new THREE.BoxGeometry(8, h2, 8), buildingMaterial2);
+        b2.position.set(15, h2 / 2, i + (Math.random() * 10 - 5));
+        scene.add(b2);
+      }
+
+      document.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+      document.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+    }
+
+    function animate() {
+      if(!isGameStarted) return;
+
+      requestAnimationFrame(animate);
+
+      // التحكم بالسرعة
+      if(keys['arrowup']){
+        velocity += acceleration;
+        if(velocity > maxSpeed) velocity = maxSpeed;
+      } else if(keys['arrowdown']){
+        velocity -= acceleration;
+        if(velocity < -maxSpeed / 2) velocity = -maxSpeed / 2;
+      } else {
+        if(velocity > 0) velocity -= deceleration;
+        else if(velocity < 0) velocity += deceleration;
+        if(Math.abs(velocity) < deceleration) velocity = 0;
+      }
+
+      let turnDirection = 0;
+      if(keys['arrowleft']) turnDirection = 1;
+      else if(keys['arrowright']) turnDirection = -1;
+
+      const isDrifting = keys['shift'] && velocity > 0.1;
+
+      if(isDrifting) {
+        car.rotation.y += turnDirection * turnSpeed * 1.5;
+        velocity *= 0.995;
+        const rearLeft = new THREE.Vector3(-0.9, 0.2, 1.5);
+        const rearRight = new THREE.Vector3(0.9, 0.2, 1.5);
+        rearLeft.applyMatrix4(car.matrixWorld);
+        rearRight.applyMatrix4(car.matrixWorld);
+        createSmokeParticle(rearLeft);
+        createSmokeParticle(rearRight);
+      } else if(velocity !== 0){
+        car.rotation.y += turnDirection * turnSpeed * (velocity / maxSpeed);
+      }
+
+      car.position.x -= Math.sin(car.rotation.y) * velocity;
+      car.position.z -= Math.cos(car.rotation.y) * velocity;
+
+      const camOffset = new THREE.Vector3(0, 5, 15);
+      const camPos = camOffset.applyAxisAngle(new THREE.Vector3(0,1,0), car.rotation.y).add(car.position);
+      camera.position.lerp(camPos, 0.1);
+      const camLookAt = car.position.clone();
+      camera.lookAt(camLookAt);
+
+      animateSmoke();
+
+      renderer.render(scene, camera);
+
+      // تحديث النقاط (كمثال بسيط: زيادة النقاط حسب السرعة)
+      score += Math.abs(velocity);
+      document.getElementById('score').textContent = `النقاط: ${Math.floor(score)}`;
+    }
+
+    window.addEventListener('resize', () => {
+      if (!camera || !renderer) return;
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function startGame() {
+      if (isGameStarted) return;
+      isGameStarted = true;
+      document.getElementById('startScreen').style.display = 'none';
+      init();
+      animate();
+    }
+
+    document.getElementById('startBtn').onclick = startGame;
+  </script>
+</body>
+</html>
